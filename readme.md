@@ -19,22 +19,20 @@ This ensures that sensitive information like GitHub access tokens **never leaves
 ---
 
 ## **File Structure**
-LeetSave/
-├── app/                     # FastAPI backend
-│   ├── main.py              # FastAPI app with endpoints
-│   ├── utils.py             # Helper functions (e.g., fetch GitHub user info)
-│   ├── .env                 # Environment variables (client IDs, secrets, etc.)
-│   └── requirements.txt     # Python dependencies
-│
-├── Extension/               # Chrome extension
-│   ├── manifest.json        # Extension manifest file
-│   ├── popup.html           # Welcome / login page
-│   ├── popup.js             # Handles login and OAuth flow
-│   ├── background.js        # Intercepts LeetCode submissions
-│   └── other_assets/        # Optional CSS, icons, etc.
-│
-└── README.md                # Project overview and setup instructions
-
+```bash
+.
+├── LeetSave/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── utils.py
+│   │   ├── .env
+│   │   └── requirements.txt
+│   ├── Extension/
+│   │   ├── manifest.json
+│   │   ├── background.js
+│   │   └── other_assets/
+├── README.md
+├── .gitignore
 
 ---
 
@@ -43,13 +41,13 @@ LeetSave/
 ### 1. Backend (FastAPI)
 1. Create a Python virtual environment:
     ```bash
-    python -m venv .venv
+    uv venv
     source .venv/bin/activate  # Linux/macOS
     .venv\Scripts\activate     # Windows
     ```
 2. Install dependencies:
     ```bash
-    pip install -r app/requirements.txt
+    uv pip install -r app/requirements.txt
     ```
 3. Set environment variables in `.env`:
     ```
