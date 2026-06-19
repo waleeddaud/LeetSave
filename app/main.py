@@ -1,70 +1,60 @@
-import requests
-from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from pathlib import Path
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from utils import get_user, generate_custom_token
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-import os
-from dotenv import load_dotenv
-from urllib.parse import quote
-load_dotenv()
+from api.v1.router import api_router
+from config import get_settings
 
-app = FastAPI()
+settings = get_settings()
+STATIC_DIR = Path(__file__).parent / "static"
+
+app = FastAPI(title="LeetSave API", version="1.0.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # or ["*"] to allow all
+    allow_origins=settings.cors_origins_list or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
-GITHUB_CLIENT_SECRET =  os.getenv("GITHUB_CLIENT_SECRET")
-CHROME_EXTENSION_ID = os.getenv("CHROME_EXTENSION_ID")
-print("GITHUB_CLIENT_ID =", os.getenv("GITHUB_CLIENT_ID"))
-print("CALLBACK_URL =", os.getenv("CALLBACK_URL"))
+app.include_router(api_router, prefix="/api/v1")
 
-@app.post("/login")
-def github_login():
-    print("Processing request for /login")
-    scope = os.getenv("SCOPE", "repo")
-    redirect_uri = os.getenv("CALLBACK_URL")  
-    encoded_redirect_uri = quote(redirect_uri, safe="") 
 
-    github_oauth_url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={GITHUB_CLIENT_ID}"
-        f"&redirect_uri={encoded_redirect_uri}"
-        f"&scope={scope}"
-        f"&prompt=login"
-    )
-    return {"url": github_oauth_url}
+@app.get("/health")
+def health():
+    return {"status": "ok", "env": settings.app_env}
+
+
+def _render_page(filename: str) -> HTMLResponse:
+    path = STATIC_DIR / filename
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get("/", response_class=HTMLResponse)
+def onboarding():
+    return _render_page("onboarding.html")
+
+
+@app.get("/onboarding", response_class=HTMLResponse)
+def onboarding_alias():
+    return _render_page("onboarding.html")
+
+
+@app.get("/onboarding/success", response_class=HTMLResponse)
+def onboarding_success():
+    return _render_page("success.html")
+
+
+@app.get("/onboarding/error", response_class=HTMLResponse)
+def onboarding_error(reason: str = "unknown"):
+    page = (STATIC_DIR / "error.html").read_text(encoding="utf-8")
+    return HTMLResponse(page.replace("{{reason}}", reason))
+
 
 @app.get("/github/callback")
-def github_callback(code: str):
-    token_url = "https://github.com/login/oauth/access_token"
-    headers = {"Accept": "application/json"}
-    data = {
-        "client_id": GITHUB_CLIENT_ID,
-        "client_secret":  GITHUB_CLIENT_SECRET,
-        "code": code,
-        "redirect_uri": "http://localhost:8000/github/callback"
-    }
-    res = requests.post(token_url, headers=headers, data=data)
-    token_json = res.json()
-    print("Token Response:", token_json)
-    access_token = token_json.get("access_token")
-    print("Access Token:", access_token)
-    user_data = get_user(access_token)
-    
-    # Anyone with this access token can push to github we need to store it securely
-    # iNSTEAD OF GIVING THIS ACCESS CODE TO EXTENSION I WANT TO GIVE A CUSTOM TOKEN
-    
-    # Store access_token for this user (securely in DB) and generate custom token against it
-    # return {"access_token": access_token}
-    token = generate_custom_token(github_id=12345)  # Replace with actual GitHub user ID
-    return RedirectResponse(
-        url=f"chrome-extension://{CHROME_EXTENSION_ID}/success.html#token={access_token}"
-    )
-
+def legacy_github_callback(code: str):
+    return RedirectResponse(f"/api/v1/auth/github/callback?code={code}")
 

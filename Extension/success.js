@@ -1,7 +1,10 @@
-// success.js
-const token = window.location.hash.split("=")[1];
+const hash = window.location.hash || "";
+const token = hash.startsWith("#token=") ? hash.slice("#token=".length) : null;
+
 if (token) {
-  chrome.storage.local.set({ github_token: token }, () => {
-    console.log("GitHub token saved!");
+  chrome.storage.local.set({ backend_token: decodeURIComponent(token) }, () => {
+    console.log("LeetSave backend session saved");
   });
+} else {
+  console.warn("LeetSave: no backend token found in redirect URL");
 }

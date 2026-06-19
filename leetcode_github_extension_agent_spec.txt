@@ -1,0 +1,688 @@
+PROJECT SPEC / AGENT PROMPT
+LeetCode Accepted Solutions Auto-Push Chrome Extension + FastAPI Backend
+
+Purpose
+Build an automation where users sign up with GitHub, install/use a Chrome extension, solve LeetCode problems normally, and whenever their own LeetCode submission becomes Accepted, the system sends the accepted solution to a FastAPI backend. The backend generates an LLM explanation and pushes the solution plus explanation into a single GitHub repository owned by that user.
+
+This file is intended to be read by coding agents such as Codex, Cursor, Claude Code, or similar tools. Follow it as the source of truth.
+
+====================================================================
+1. CORE PRODUCT IDEA
+====================================================================
+
+Build a Chrome-only extension and FastAPI backend.
+
+User journey:
+1. User installs the Chrome extension.
+2. User opens the extension popup.
+3. User must sign up/login with GitHub before using the extension.
+4. GitHub OAuth redirects to the FastAPI backend callback URL.
+5. Backend creates/saves the user in PostgreSQL.
+6. Backend stores GitHub authorization details securely.
+7. User completes onboarding.
+8. User solves LeetCode problems manually in the browser.
+9. Extension detects when a submission result becomes Accepted.
+10. Extension sends the accepted code/problem metadata to FastAPI backend.
+11. Backend generates an LLM explanation using LangChain with either OpenAI or Gemini, configurable through .env.
+12. Backend creates one GitHub repository named something like "leetcode-problems" or "LeetCode-Problems" if it does not already exist.
+13. Backend pushes the solution code, explanation, and metadata into that single repository.
+
+The automation goal:
+Accepted LeetCode solution -> backend -> LLM explanation -> GitHub commit.
+
+====================================================================
+2. STRICT SCOPE
+====================================================================
+
+Only implement Chrome extension support.
+Do not implement Firefox, Safari, Edge-specific logic, mobile app support, or non-Chrome browser support.
+Do not implement analytics, dashboards, leaderboards, payment, subscriptions, social sharing, or multiple coding platforms in the first version.
+Focus only on completing the required automation.
+
+Required modules:
+1. Chrome Extension
+2. FastAPI Backend
+3. PostgreSQL Database using SQLAlchemy
+4. GitHub OAuth signup/login
+5. Session/token management
+6. LeetCode accepted-submission detection
+7. LLM explanation generation
+8. GitHub repository creation/update
+9. Push solution files to GitHub
+
+====================================================================
+3. IMPORTANT SAFETY / COMPLIANCE REQUIREMENTS
+====================================================================
+
+The extension must not behave in a way that risks abuse, evasion, or account flagging.
+
+Do:
+- Only operate on LeetCode pages required for the feature, such as leetcode.com/problems/* and relevant submission/result pages.
+- Only capture the signed-in user's own manually submitted solution.
+- Prefer DOM observation and normal page-state detection where reliable.
+- If observing LeetCode network/API behavior is needed, keep it passive and minimal.
+- Never modify LeetCode requests or responses.
+- Never automate solving or submitting problems.
+- Never bypass CAPTCHA, anti-bot checks, rate limits, authentication flows, or LeetCode protections.
+- Never scrape aggressively.
+- Never collect LeetCode cookies, passwords, session tokens, or unrelated browsing data.
+- Rate-limit backend calls and deduplicate accepted submissions.
+- Ask for only required Chrome permissions.
+
+Do not implement stealth, anti-detection, botting, account-flag bypass, or any technique intended to evade LeetCode platform protections.
+
+Interpret the requirement "do not get the user flagged" as:
+- Make the extension privacy-preserving.
+- Avoid excessive requests.
+- Avoid automated submissions.
+- Avoid modifying LeetCode behavior.
+- Capture only user-owned accepted submissions after normal user action.
+
+====================================================================
+4. TECH STACK
+====================================================================
+
+Backend:
+- Python
+- FastAPI
+- SQLAlchemy ORM
+- Alembic migrations
+- PostgreSQL database
+- Pydantic / pydantic-settings
+- HTTPX or requests for external API calls
+- PyJWT or Authlib for auth/session support
+- Cryptography/Fernet or another secure encryption method for stored GitHub tokens if OAuth tokens are stored
+- LangChain for LLM integration
+- OpenAI integration
+- Gemini integration
+
+Frontend/onboarding:
+- Minimalistic signup/login page
+- GitHub login button
+- Simple success/error screens
+- Extension can open backend onboarding page in a tab
+
+Chrome Extension:
+- Chrome Manifest V3
+- popup UI
+- background service worker
+- content script for LeetCode pages
+- chrome.storage for extension-side backend session state
+- minimal host permissions for backend URL and LeetCode pages
+
+Database:
+- PostgreSQL
+
+====================================================================
+5. ENVIRONMENT CONFIGURATION
+====================================================================
+
+All configurable settings must come from .env.
+
+Required backend .env examples:
+
+APP_ENV=development
+BACKEND_BASE_URL=http://localhost:8000
+FRONTEND_OR_EXTENSION_SUCCESS_URL=chrome-extension://<extension-id>/success.html
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/leetcode_github_sync
+JWT_SECRET_KEY=replace-me
+JWT_ALGORITHM=HS256
+SESSION_EXPIRE_MINUTES=10080
+
+GITHUB_CLIENT_ID=replace-me
+GITHUB_CLIENT_SECRET=replace-me
+GITHUB_REDIRECT_URI=http://localhost:8000/api/v1/auth/github/callback
+GITHUB_DEFAULT_REPO_NAME=leetcode-problems
+GITHUB_DEFAULT_BRANCH=main
+
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=replace-me
+GEMINI_API_KEY=replace-me
+GEMINI_MODEL=gemini-1.5-flash
+
+TOKEN_ENCRYPTION_KEY=replace-me
+CORS_ALLOWED_ORIGINS=http://localhost:3000,chrome-extension://<extension-id>
+
+LLM provider behavior:
+- If LLM_PROVIDER=openai, use OpenAI through LangChain.
+- If LLM_PROVIDER=gemini, use Gemini through LangChain.
+- Model name must be configurable through .env.
+- Do not hardcode provider/model values.
+- Code should fail clearly if selected provider key/model is missing.
+
+====================================================================
+6. GITHUB AUTH / SIGNUP REQUIREMENTS
+====================================================================
+
+The first step for every user is GitHub signup/login.
+
+Required behavior:
+1. Minimalistic signup page with "Continue with GitHub" button.
+2. User authorizes GitHub access.
+3. Backend receives callback.
+4. Backend fetches GitHub user profile.
+5. Backend creates or updates local user record.
+6. Backend stores GitHub username, GitHub ID, avatar URL, email if available.
+7. Backend creates a secure session/JWT for the extension/backend communication.
+8. Extension stores backend-issued session token securely using chrome.storage.local.
+9. Extension checks /me before enabling LeetCode automation.
+
+GitHub permissions:
+- The app must be able to create a single repository for the user if needed.
+- The app must be able to push files/commits into that repository.
+- For MVP, GitHub OAuth with required repo permissions may be used.
+- Prefer least-privilege implementation where possible.
+
+Security:
+- Never expose GitHub client secret in the extension.
+- OAuth code exchange must happen only on the backend.
+- Store GitHub token encrypted if stored in DB.
+- Do not log sensitive tokens.
+- Use secure error handling.
+
+====================================================================
+7. BACKEND DATABASE REQUIREMENTS
+====================================================================
+
+Use SQLAlchemy models and Alembic migrations.
+
+Suggested tables:
+
+users:
+- id: UUID or integer primary key
+- github_id: string, unique, indexed
+- github_username: string, indexed
+- email: string nullable
+- avatar_url: string nullable
+- created_at
+- updated_at
+
+user_sessions:
+- id
+- user_id foreign key
+- token_hash or jti
+- expires_at
+- revoked_at nullable
+- created_at
+
+user_github_connections:
+- id
+- user_id foreign key
+- access_token_encrypted nullable depending on implementation
+- token_type
+- scope
+- repo_name
+- repo_full_name
+- repo_id nullable
+- default_branch
+- created_at
+- updated_at
+
+leetcode_submissions:
+- id
+- user_id foreign key
+- problem_slug
+- problem_title
+- difficulty nullable
+- language
+- status
+- leetcode_url
+- code_hash
+- code_text or encrypted code text depending on design
+- llm_explanation nullable
+- github_path_code nullable
+- github_path_explanation nullable
+- github_commit_sha nullable
+- pushed_at nullable
+- created_at
+- updated_at
+
+Optional:
+submission_events:
+- id
+- user_id
+- raw_event_json
+- created_at
+
+Important deduplication:
+- Do not push duplicate commits for the same user + problem_slug + language + code_hash.
+- If the same accepted code is already pushed, return a clean "already synced" response.
+
+====================================================================
+8. BACKEND API REQUIREMENTS
+====================================================================
+
+Base path: /api/v1
+
+Auth endpoints:
+
+GET /api/v1/auth/github/login
+- Redirects user to GitHub OAuth authorization URL.
+
+GET /api/v1/auth/github/callback
+- Receives code/state from GitHub.
+- Exchanges code on backend.
+- Creates/updates user.
+- Creates local session/JWT.
+- Redirects back to extension success page or returns token using a safe extension-compatible flow.
+
+GET /api/v1/me
+- Requires backend session token.
+- Returns current user info and GitHub connection status.
+
+POST /api/v1/auth/logout
+- Revokes local session.
+
+Submission endpoints:
+
+POST /api/v1/submissions/leetcode
+- Requires authenticated user.
+- Called by Chrome extension after accepted LeetCode submission.
+- Validates payload.
+- Deduplicates by user_id + problem_slug + language + code_hash.
+- Stores submission.
+- Generates LLM explanation.
+- Pushes code/explanation to GitHub.
+- Returns sync status.
+
+GET /api/v1/submissions
+- Optional for debugging/admin/user history.
+
+GitHub endpoints:
+
+POST /api/v1/github/ensure-repo
+- Requires authenticated user.
+- Creates single repo if missing.
+- Saves repo info in DB.
+
+POST /api/v1/github/sync/{submission_id}
+- Optional manual retry endpoint.
+- Pushes a stored accepted submission to GitHub.
+
+Health endpoint:
+
+GET /health
+- Returns backend health.
+
+====================================================================
+9. CHROME EXTENSION REQUIREMENTS
+====================================================================
+
+Use Manifest V3.
+
+Required extension behavior:
+1. Popup opens with login state.
+2. If not authenticated, show "Continue with GitHub".
+3. Clicking login opens backend GitHub login URL.
+4. After success, extension stores backend auth token/session.
+5. Extension runs only on LeetCode problem pages.
+6. It detects user-submitted accepted results.
+7. It extracts problem metadata and submitted code.
+8. It sends accepted solution to backend.
+9. It shows status: synced, already synced, failed, login required.
+
+Suggested manifest permissions:
+- storage
+- tabs if needed
+- scripting if needed
+- activeTab if possible
+- host permissions only for:
+  - https://leetcode.com/problems/*
+  - backend URL in development/production
+
+Do not request broad all_urls permission unless absolutely necessary.
+
+Accepted submission detection:
+- Prefer observing LeetCode UI state/result panel for "Accepted".
+- Use MutationObserver where practical.
+- Extract code from the Monaco/editor state or visible page context.
+- If LeetCode GraphQL/API activity must be observed, do it passively and minimally.
+- Never modify LeetCode requests.
+- Never send repeated polling requests to LeetCode.
+- Never collect cookies/session tokens.
+
+Payload sent to backend should include:
+- problem_slug
+- problem_title
+- difficulty if available
+- language
+- code
+- status = "Accepted"
+- leetcode_url
+- timestamp
+
+Backend should compute code_hash too, but extension may also send it.
+
+====================================================================
+10. GITHUB REPOSITORY REQUIREMENTS
+====================================================================
+
+The backend must create/use exactly one repository per user for this automation.
+
+Repository name:
+- Use env GITHUB_DEFAULT_REPO_NAME, default: leetcode-problems
+
+Repository behavior:
+- If repo does not exist, create it.
+- If repo exists, use it.
+- Do not create a new repo per problem.
+- Do not create duplicate repos.
+
+Suggested repository structure:
+
+leetcode-problems/
+  README.md
+  easy/
+    two-sum/
+      solution.py
+      explanation.md
+      metadata.json
+  medium/
+    add-two-numbers/
+      solution.cpp
+      explanation.md
+      metadata.json
+  hard/
+    median-of-two-sorted-arrays/
+      solution.py
+      explanation.md
+      metadata.json
+
+If difficulty is unknown:
+  unknown/
+    problem-slug/
+      solution.ext
+      explanation.md
+      metadata.json
+
+File naming:
+- Use problem slug for folder names.
+- Use language extension mapping:
+  - python -> solution.py
+  - python3 -> solution.py
+  - cpp/c++ -> solution.cpp
+  - java -> Solution.java
+  - javascript -> solution.js
+  - typescript -> solution.ts
+  - go -> solution.go
+  - rust -> solution.rs
+  - c -> solution.c
+  - csharp/c# -> Solution.cs
+  - otherwise -> solution.txt
+
+Commit message example:
+Add LeetCode solution: Two Sum [Python]
+
+README.md:
+- Create initial README if missing.
+- Optionally update index table with problem title, difficulty, language, and path.
+
+====================================================================
+11. LLM EXPLANATION REQUIREMENTS
+====================================================================
+
+Use LangChain to support OpenAI and Gemini through a provider switch in .env.
+
+The LLM explanation should be saved as explanation.md.
+
+Explanation should include:
+1. Problem title
+2. Short approach explanation
+3. Step-by-step logic
+4. Time complexity
+5. Space complexity
+6. Notes about edge cases if relevant
+7. Code section or code summary
+
+Prompt requirements:
+- Do not invent problem constraints if not provided.
+- Use the submitted code as the primary source.
+- Keep explanation concise but useful.
+- If difficulty or problem statement is unavailable, still explain based on code and title.
+
+Suggested prompt template:
+
+You are explaining a user's accepted LeetCode solution.
+Problem Title: {problem_title}
+Problem Slug: {problem_slug}
+Difficulty: {difficulty}
+Language: {language}
+Accepted Code:
+{code}
+
+Write a clear markdown explanation with:
+- Approach
+- Step-by-step logic
+- Time complexity
+- Space complexity
+- Edge cases
+Do not claim details that are not supported by the code.
+Keep it concise and professional.
+
+====================================================================
+12. MINIMALISTIC SIGNUP / ONBOARDING PAGE
+====================================================================
+
+Create a very simple onboarding page.
+
+Page requirements:
+- App name/title
+- One-line description
+- "Continue with GitHub" button
+- Small note explaining that access is used only to create/update the LeetCode solutions repository
+- Success page after GitHub connection
+- Error page or message if auth fails
+
+Design style:
+- Minimal
+- Clean
+- Professional
+- White/light background
+- Centered card
+- Simple button
+- No complex UI framework required unless already present
+
+The API key/configuration should be enabled through backend .env, not hardcoded in frontend/extension.
+If a settings page is implemented, it may show which LLM provider is configured, but it must never expose secret API keys.
+
+====================================================================
+13. EXISTING CODE UPDATE INSTRUCTIONS FOR CODING AGENT
+====================================================================
+
+Before writing code, inspect the existing repository and produce a short implementation plan.
+
+The plan must include:
+1. What already exists.
+2. What is missing.
+3. What is misaligned with this spec.
+4. What files/modules will be updated.
+5. What will be implemented first.
+
+Then implement the changes.
+
+Important:
+- Do not rewrite the entire project if existing code can be updated.
+- Do not introduce unrelated features.
+- Do not change tech stack away from Python/FastAPI/SQLAlchemy/PostgreSQL.
+- Do not remove existing working code unless it conflicts with this spec.
+- Keep changes focused on completing the required automation.
+- Add migrations if database schema changes.
+- Add clear environment variable examples.
+- Add basic tests where practical.
+- Add README setup instructions if missing.
+
+The coding agent should proceed like this:
+
+Step 1: Inspect current project structure.
+Step 2: Identify backend, extension, and existing auth/code modules.
+Step 3: Compare existing code against this spec.
+Step 4: Create a concise plan.
+Step 5: Implement backend auth/session/database models.
+Step 6: Implement GitHub repo service.
+Step 7: Implement LLM explanation service with OpenAI/Gemini switch.
+Step 8: Implement submission ingestion and deduplication.
+Step 9: Implement Chrome extension login and LeetCode accepted detection.
+Step 10: Test full flow locally.
+
+====================================================================
+14. SESSION / TOKEN MANAGEMENT REQUIREMENTS
+====================================================================
+
+Backend should issue its own session/JWT after GitHub login.
+The Chrome extension should authenticate to backend using that backend-issued token.
+
+Requirements:
+- Do not use GitHub access token directly inside the extension for backend calls.
+- Do not expose GitHub token to content scripts.
+- Store backend session token using chrome.storage.local.
+- Backend validates token on protected endpoints.
+- Sessions should expire.
+- Logout should revoke local session.
+- Use CORS carefully for extension origin and onboarding page.
+
+====================================================================
+15. SUBMISSION PROCESSING FLOW
+====================================================================
+
+When extension detects Accepted:
+
+1. Extract payload:
+   - problem_slug
+   - problem_title
+   - difficulty if known
+   - language
+   - code
+   - status
+   - leetcode_url
+
+2. Send to:
+   POST /api/v1/submissions/leetcode
+
+3. Backend validates:
+   - user session
+   - status must be Accepted
+   - code must not be empty
+   - problem_slug/title must exist
+
+4. Backend computes:
+   - code_hash = SHA256(code + language + problem_slug)
+
+5. Backend checks duplicate:
+   - if same user/problem/language/code_hash already pushed, return already_synced.
+
+6. Backend stores submission.
+
+7. Backend generates explanation through configured LLM.
+
+8. Backend ensures GitHub repo exists.
+
+9. Backend pushes:
+   - solution file
+   - explanation.md
+   - metadata.json
+
+10. Backend updates submission with commit SHA and file paths.
+
+11. Extension displays sync success.
+
+====================================================================
+16. ERROR HANDLING REQUIREMENTS
+====================================================================
+
+Handle these cases cleanly:
+- User not logged in.
+- GitHub authorization failed.
+- GitHub token expired/revoked.
+- Repo creation failed.
+- GitHub push failed.
+- LLM provider/key/model missing.
+- LLM generation failed.
+- Duplicate submission.
+- LeetCode page structure changed and code extraction failed.
+- Backend unavailable.
+
+For LLM failure:
+- Either retry once or push solution with a fallback explanation saying explanation generation failed.
+- Do not lose the accepted code.
+
+For GitHub failure:
+- Save submission in DB with failed status so sync can be retried.
+
+====================================================================
+17. LOCAL DEVELOPMENT REQUIREMENTS
+====================================================================
+
+Backend should include:
+- .env.example
+- requirements.txt or pyproject.toml
+- Alembic setup
+- Docker Compose for PostgreSQL if not already present
+- README with local run instructions
+
+Suggested commands:
+
+python -m venv .venv
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload
+
+Chrome extension local testing:
+- Load unpacked extension in chrome://extensions
+- Configure backend URL in extension config/env/constants
+- Login with GitHub
+- Open LeetCode problem page
+- Submit manually
+- Verify accepted solution syncs to GitHub
+
+====================================================================
+18. ACCEPTANCE CRITERIA
+====================================================================
+
+The implementation is complete when:
+
+1. User can sign up/login with GitHub from a minimal page or extension popup.
+2. User details are saved in PostgreSQL.
+3. Backend session/token management works correctly.
+4. Extension requires login before automation is active.
+5. Extension only runs on Chrome and LeetCode pages.
+6. Extension detects accepted LeetCode submissions without modifying LeetCode requests.
+7. Extension sends accepted code and metadata to FastAPI backend.
+8. Backend stores submission in PostgreSQL.
+9. Backend deduplicates already-synced accepted submissions.
+10. Backend creates/uses one GitHub repository per user.
+11. Backend pushes solution code to the repository.
+12. Backend generates LLM explanation using LangChain.
+13. LLM provider can be switched from OpenAI to Gemini through .env only.
+14. Backend pushes explanation.md with the solution.
+15. Backend handles failures clearly.
+16. No secrets are exposed in extension or frontend code.
+17. README explains setup and testing.
+
+====================================================================
+19. NON-GOALS
+====================================================================
+
+Do not implement:
+- Automatic LeetCode solving.
+- Automatic LeetCode submission.
+- Captcha bypass.
+- Anti-detection or stealth techniques.
+- Credential collection from LeetCode.
+- Scraping unrelated user data.
+- Multi-platform coding site support.
+- Payment/subscription features.
+- Heavy dashboard UI.
+- Multiple GitHub repos per user.
+
+====================================================================
+20. FINAL INSTRUCTION TO CODING AGENT
+====================================================================
+
+Your task is to complete this automation end-to-end.
+
+First, inspect the existing codebase. Then write a short plan covering what already exists, what is missing, what is misaligned, and what you will implement. After that, update the existing code only where needed and implement the missing pieces.
+
+Use Python, FastAPI, SQLAlchemy, PostgreSQL, Chrome Manifest V3, GitHub OAuth, LangChain, OpenAI/Gemini provider switching through .env, and secure backend session management.
+
+Keep the implementation focused on the requirements. Do not add unrelated features. Do not implement any bypass or evasion behavior. The extension should help users sync their own accepted LeetCode solutions to GitHub in a clean, privacy-preserving, and reliable way.

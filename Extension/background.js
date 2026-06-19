@@ -1,98 +1,123 @@
-function loginWithGitHub() {
-  fetch("http://localhost:8000/login", { method: "POST", credentials: "include" })
-    .then((res) => res.json())  // convert response to JSON
-    .then((data) => {
-      console.log("Received data:", data);
-      chrome.tabs.create({ url: data.url }); // now data.url exists
-    })
-    .catch((err) => console.error("Fetch error:", err));
+import { BACKEND_BASE_URL } from "./config.js";
+
+const SYNC_DEDUP_KEY = "synced_hashes";
+const LAST_STATUS_KEY = "last_sync_status";
+
+async function getBackendToken() {
+  const data = await chrome.storage.local.get(["backend_token"]);
+  return data.backend_token || null;
 }
 
-// Example trigger: right-click menu or first push attempt
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "github-login",
-    title: "Login with GitHub",
-    contexts: ["all"],
+async function saveSyncHash(hash) {
+  const data = await chrome.storage.local.get([SYNC_DEDUP_KEY]);
+  const hashes = new Set(data[SYNC_DEDUP_KEY] || []);
+  hashes.add(hash);
+  await chrome.storage.local.set({ [SYNC_DEDUP_KEY]: [...hashes] });
+}
+
+async function hasSyncHash(hash) {
+  const data = await chrome.storage.local.get([SYNC_DEDUP_KEY]);
+  const hashes = data[SYNC_DEDUP_KEY] || [];
+  return hashes.includes(hash);
+}
+
+async function setLastStatus(status) {
+  await chrome.storage.local.set({ [LAST_STATUS_KEY]: { ...status, at: Date.now() } });
+}
+
+export async function loginWithGitHub() {
+  await chrome.tabs.create({ url: `${BACKEND_BASE_URL}/api/v1/auth/github/login` });
+}
+
+export async function fetchMe() {
+  const token = await getBackendToken();
+  if (!token) return null;
+
+  const response = await fetch(`${BACKEND_BASE_URL}/api/v1/me`, {
+    headers: { Authorization: `Bearer ${token}` },
   });
-});
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "github-login") {
-    loginWithGitHub();
-  }
-});
-
-
-// Track submissions we've already processed
-let processedSubmissions = new Set();
-
-// Capture submit payload
-chrome.webRequest.onBeforeRequest.addListener(
-  (details) => {
-    if (details.url.includes("/submit/")) {
-      let payload = details.requestBody?.raw?.[0]?.bytes;
-      if (payload) {
-        let text = new TextDecoder("utf-8").decode(payload);
-        console.log("Submit Payload:", text);
-        // TODO: Forward to backend if needed
-      }
+  if (!response.ok) {
+    if (response.status === 401) {
+      await chrome.storage.local.remove(["backend_token"]);
     }
-  },
-  { urls: ["*://leetcode.com/problems/*/submit/"] },
-  ["requestBody"]
-);
-
-// Function to poll until submission gets final verdict
-function pollSubmissionResult(url, submissionId, maxRetries = 5, interval = 2000) {
-  let tries = 0;
-
-  function check() {
-    fetch(url, { credentials: "include" })
-      .then((res) => res.json())
-      .then((data) => {
-        console.log("Check Response:", data);
-
-        if (data.state === "PENDING" || data.state === "STARTED") {
-          if (tries < maxRetries) {
-            tries++;
-            setTimeout(check, interval); // retry
-          } else {
-            console.warn("Submission", submissionId, "timed out without final result.");
-          }
-        } else {
-          // Got a final result
-          if (data.status_msg === "Accepted") {
-            console.log(" Submission", submissionId, "was Accepted!");
-            // TODO: send code + metadata to backend
-          } else {
-            console.log(" Submission", submissionId, "result:", data.status_msg);
-          }
-        }
-      })
-      .catch((err) => console.error("Fetch failed:", err));
+    return null;
   }
 
-  check();
+  return response.json();
 }
 
-// Capture check results, but only ONCE per submission
-chrome.webRequest.onCompleted.addListener(
-  (details) => {
-    if (details.url.includes("/check/")) {
-      // Extract submission ID from URL
-      let match = details.url.match(/submissions\/detail\/(\d+)\/check/);
-      if (!match) return;
+export async function logout() {
+  const token = await getBackendToken();
+  if (token) {
+    await fetch(`${BACKEND_BASE_URL}/api/v1/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+  await chrome.storage.local.remove(["backend_token", SYNC_DEDUP_KEY, LAST_STATUS_KEY]);
+}
 
-      let submissionId = match[1];
-      if (processedSubmissions.has(submissionId)) return; // Skip duplicates
-      processedSubmissions.add(submissionId);
+async function syncSubmission(payload) {
+  const token = await getBackendToken();
+  if (!token) {
+    await setLastStatus({ status: "login_required", message: "Login required" });
+    return { status: "login_required", message: "Login required" };
+  }
 
-      console.log("Submission checked:", submissionId, details.url);
+  const dedupKey = `${payload.problem_slug}:${payload.language}:${payload.code.length}`;
+  if (await hasSyncHash(dedupKey)) {
+    const result = { status: "already_synced", message: "Already synced locally" };
+    await setLastStatus(result);
+    return result;
+  }
 
-      // Poll until we get a final Accepted/Rejected/etc.
-      pollSubmissionResult(details.url, submissionId);
+  try {
+    const response = await fetch(`${BACKEND_BASE_URL}/api/v1/submissions/leetcode`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      const failed = { status: "failed", message: result.detail || "Sync failed" };
+      await setLastStatus(failed);
+      return failed;
     }
-  },
-  { urls: ["*://leetcode.com/submissions/detail/*/check/"] }
-);
+
+    if (result.status === "synced" || result.status === "already_synced") {
+      await saveSyncHash(dedupKey);
+    }
+
+    await setLastStatus(result);
+    return result;
+  } catch (error) {
+    const failed = { status: "failed", message: "Backend unavailable" };
+    await setLastStatus(failed);
+    return failed;
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "SYNC_SUBMISSION") {
+    syncSubmission(message.payload).then(sendResponse);
+    return true;
+  }
+  if (message.type === "GET_AUTH_STATUS") {
+    fetchMe().then((user) => sendResponse({ user })).catch(() => sendResponse({ user: null }));
+    return true;
+  }
+  if (message.type === "LOGIN") {
+    loginWithGitHub().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (message.type === "LOGOUT") {
+    logout().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  return false;
+});
