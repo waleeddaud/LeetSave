@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +9,8 @@ from models.submission import LeetCodeSubmission
 from models.user import User
 from services.github import compute_code_hash, push_submission_files
 from services.llm import generate_explanation
+
+logger = logging.getLogger("leetsave")
 
 
 async def process_leetcode_submission(
@@ -45,6 +48,7 @@ async def process_leetcode_submission(
         .first()
     )
     if existing:
+        logger.info("Sync SKIP %s/%s — already on GitHub", user.github_username, problem_slug)
         return {
             "status": "already_synced",
             "message": "This accepted solution was already pushed to GitHub",
@@ -108,6 +112,12 @@ async def process_leetcode_submission(
 
     try:
         commit_sha = await push_submission_files(db, user, submission)
+        logger.info(
+            "Sync OK %s/%s → GitHub commit %s",
+            user.github_username,
+            problem_slug,
+            (commit_sha or "")[:7],
+        )
         return {
             "status": "synced",
             "message": "Solution synced to GitHub",
@@ -117,6 +127,8 @@ async def process_leetcode_submission(
     except Exception as exc:
         submission.sync_status = "github_failed"
         db.commit()
+        short_error = str(exc).split(".")[0]
+        logger.warning("Sync FAIL %s/%s — %s", user.github_username, problem_slug, short_error)
         return {
             "status": "failed",
             "message": f"GitHub sync failed: {exc}",
@@ -152,6 +164,12 @@ async def retry_github_sync(db: Session, user: User, submission_id: UUID) -> dic
 
     try:
         commit_sha = await push_submission_files(db, user, submission)
+        logger.info(
+            "Sync OK %s/%s → GitHub commit %s (retry)",
+            user.github_username,
+            submission.problem_slug,
+            (commit_sha or "")[:7],
+        )
         return {
             "status": "synced",
             "message": "Solution synced to GitHub",
@@ -161,6 +179,13 @@ async def retry_github_sync(db: Session, user: User, submission_id: UUID) -> dic
     except Exception as exc:
         submission.sync_status = "github_failed"
         db.commit()
+        short_error = str(exc).split(".")[0]
+        logger.warning(
+            "Sync FAIL %s/%s — %s (retry)",
+            user.github_username,
+            submission.problem_slug,
+            short_error,
+        )
         return {
             "status": "failed",
             "message": f"GitHub sync failed: {exc}",

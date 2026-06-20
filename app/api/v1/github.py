@@ -1,4 +1,5 @@
 from uuid import UUID
+import logging
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from services.github import ensure_repo
 from services.submission import retry_github_sync
 
 router = APIRouter()
+logger = logging.getLogger("leetsave")
 
 
 @router.post("/ensure-repo")
@@ -20,12 +22,14 @@ async def ensure_user_repo(
 ):
     try:
         connection = await ensure_repo(db, user)
+        logger.info("GitHub repo ready %s", connection.repo_full_name)
         return {
             "status": "ok",
             "repo_full_name": connection.repo_full_name,
             "default_branch": connection.default_branch,
         }
     except Exception as exc:
+        logger.warning("GitHub repo FAIL %s — %s", user.github_username, str(exc).split(".")[0])
         return {"status": "failed", "message": str(exc)}
 
 
@@ -35,5 +39,4 @@ async def sync_submission(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    result = await retry_github_sync(db, user, submission_id)
-    return SubmissionResponse(**result)
+    return SubmissionResponse(**await retry_github_sync(db, user, submission_id))

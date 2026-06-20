@@ -88,7 +88,9 @@ def revoke_session(db: Session, token: str) -> bool:
     return True
 
 
-def store_github_token(db: Session, user: User, access_token: str, scope: str | None) -> None:
+def store_github_token(
+    db: Session, user: User, access_token: str, scope: str | None, token_kind: str | None = None
+) -> None:
     from models.github_connection import UserGitHubConnection
 
     connection = user.github_connection
@@ -96,13 +98,16 @@ def store_github_token(db: Session, user: User, access_token: str, scope: str | 
     if connection:
         connection.access_token_encrypted = encrypted
         connection.scope = scope
-        connection.token_type = "bearer"
+        connection.token_type = token_kind or "classic_oauth"
+        connection.repo_full_name = None
+        connection.repo_id = None
+        connection.repo_name = settings.github_default_repo_name
     else:
         connection = UserGitHubConnection(
             user_id=user.id,
             access_token_encrypted=encrypted,
             scope=scope,
-            token_type="bearer",
+            token_type=token_kind or "classic_oauth",
             repo_name=settings.github_default_repo_name,
             default_branch=settings.github_default_branch,
         )

@@ -23,8 +23,10 @@
       font-weight: 600;
       cursor: pointer;
     }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
     .primary { background: #24292f; color: #fff; }
     .secondary { background: #f3f4f6; color: #111827; margin-top: 8px; }
+    .danger { background: #fee2e2; color: #991b1b; margin-top: 8px; }
     .status {
       margin-top: 12px;
       padding: 10px;
@@ -44,6 +46,7 @@
 
     <div id="logged-out">
       <button id="login-btn" class="primary">Continue with GitHub</button>
+      <button id="logout-stale-btn" class="danger hidden">Logout</button>
     </div>
 
     <div id="logged-in" class="hidden">
@@ -54,7 +57,8 @@
           <div id="repo" style="font-size: 0.8rem; color: #6b7280;"></div>
         </div>
       </div>
-      <button id="logout-btn" class="secondary">Logout</button>
+      <button id="login-again-btn" class="secondary">Reconnect GitHub</button>
+      <button id="logout-btn" class="danger">Logout</button>
     </div>
 
     <div id="status" class="status hidden"></div>

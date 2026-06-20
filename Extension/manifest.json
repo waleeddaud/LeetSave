@@ -2,10 +2,12 @@
   "manifest_version": 3,
   "name": "LeetSave",
   "description": "Sync accepted LeetCode solutions to GitHub with AI explanations.",
-  "version": "2.0.0",
-  "permissions": ["storage", "tabs", "activeTab"],
+  "version": "2.0.8",
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "webNavigation"],
   "host_permissions": [
-    "https://leetcode.com/problems/*",
+    "https://leetcode.com/*",
+    "https://www.leetcode.com/*",
+    "https://*.leetcode.com/*",
     "http://localhost:8000/*"
   ],
   "action": {
@@ -18,9 +20,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://leetcode.com/problems/*"],
-      "js": ["content.js"],
+      "matches": ["http://localhost:8000/onboarding/success*"],
+      "js": ["auth-capture.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://leetcode.com/problems/*",
+        "https://leetcode.com/problems/*/*",
+        "https://leetcode.com/problems/*/*/*",
+        "https://www.leetcode.com/problems/*",
+        "https://www.leetcode.com/problems/*/*",
+        "https://www.leetcode.com/problems/*/*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
   "web_accessible_resources": [

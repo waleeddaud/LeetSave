@@ -1,7 +1,10 @@
+console.log("LeetSave content script loaded on", window.location.href);
+
+if (!window.__leetsaveLoaded) {
+  window.__leetsaveLoaded = true;
+
 (() => {
-  const ACCEPTED_MARKERS = ["Accepted", "accepted"];
-  const seenAcceptances = new Set();
-  let observer = null;
+  const seenSubmissions = new Set();
 
   function getProblemSlug() {
     const match = window.location.pathname.match(/\/problems\/([^/]+)/);
@@ -11,6 +14,7 @@
   function getProblemTitle() {
     const titleEl =
       document.querySelector("[data-cy='question-title']") ||
+      document.querySelector("a[href*='/problems/']") ||
       document.querySelector("div[class*='question-title']") ||
       document.querySelector("h1") ||
       document.querySelector("h2");
@@ -24,70 +28,53 @@
     if (medium) return "Medium";
     const hard = document.querySelector("[diff='Hard'], .text-difficulty-hard, .text-red-s");
     if (hard) return "Hard";
-
-    const text = document.body.innerText;
-    if (/\bEasy\b/.test(text)) return "Easy";
-    if (/\bMedium\b/.test(text)) return "Medium";
-    if (/\bHard\b/.test(text)) return "Hard";
     return null;
   }
 
-  function getLanguage() {
-    const langButton =
-      document.querySelector("[data-cy='lang-select']") ||
-      document.querySelector("button[id*='headlessui'] .text-label-1") ||
-      document.querySelector(".ant-select-selection-item");
-    const text = langButton?.textContent?.trim();
-    if (text) return text.toLowerCase();
-
-    const stored = localStorage.getItem("LEETCODE_LANGUAGE");
-    return stored || "python";
+  function getCodeFromMonacoDom() {
+    const viewLines = document.querySelectorAll(".monaco-editor .view-lines .view-line");
+    if (!viewLines.length) return "";
+    return Array.from(viewLines)
+      .map((line) => line.textContent || "")
+      .join("\n");
   }
 
-  function getEditorCode() {
-    try {
-      if (window.monaco?.editor) {
-        const models = window.monaco.editor.getModels();
-        if (models?.length) {
-          return models[0].getValue();
-        }
-      }
-    } catch (_err) {
-      // ignore editor access errors
+  function getLanguage() {
+    const langSelectors = [
+      "[data-cy='lang-select']",
+      "button[id*='headlessui'] .text-label-1",
+      "[class*='lang-select']",
+      ".ant-select-selection-item",
+    ];
+
+    for (const selector of langSelectors) {
+      const el = document.querySelector(selector);
+      const text = el?.textContent?.trim();
+      if (text) return text.toLowerCase();
     }
 
-    const textarea =
-      document.querySelector("textarea[data-cy='code-area']") ||
-      document.querySelector(".monaco-scrollable-element textarea");
-    return textarea?.value || "";
+    return "python";
   }
 
-  function nodeLooksLikeAcceptedResult(node) {
-    if (!(node instanceof HTMLElement)) return false;
-    const text = node.textContent || "";
-    if (!ACCEPTED_MARKERS.some((marker) => text.includes(marker))) return false;
-
-    const className = node.className?.toString?.() || "";
-    const likelyResultPanel =
-      className.includes("result") ||
-      className.includes("submit") ||
-      node.closest("[data-e2e-locator*='submission']") ||
-      node.closest("[class*='result']") ||
-      node.closest("[class*='status']");
-
-    return Boolean(likelyResultPanel || text.length < 200);
+  function getEditorContext() {
+    return {
+      code: getCodeFromMonacoDom(),
+      language: getLanguage(),
+    };
   }
 
-  function buildPayload() {
+  async function buildPayload() {
     const slug = getProblemSlug();
-    const code = getEditorCode();
-    if (!slug || !code.trim()) return null;
+    if (!slug) return null;
+
+    const { code, language } = getEditorContext();
+    if (!code.trim()) return null;
 
     return {
       problem_slug: slug,
       problem_title: getProblemTitle(),
       difficulty: getDifficulty(),
-      language: getLanguage(),
+      language,
       code,
       status: "Accepted",
       leetcode_url: window.location.href.split("?")[0],
@@ -95,13 +82,18 @@
     };
   }
 
-  function notifyAccepted() {
-    const payload = buildPayload();
-    if (!payload) return;
+  async function triggerSync(source) {
+    const payload = await buildPayload();
+    if (!payload) {
+      console.warn("LeetSave: submit detected but code/metadata unavailable", source);
+      return;
+    }
 
     const key = `${payload.problem_slug}:${payload.language}:${payload.code}`;
-    if (seenAcceptances.has(key)) return;
-    seenAcceptances.add(key);
+    if (seenSubmissions.has(key)) return;
+    seenSubmissions.add(key);
+
+    console.log("LeetSave: triggering sync on submit", source);
 
     chrome.runtime.sendMessage({ type: "SYNC_SUBMISSION", payload }, (response) => {
       if (chrome.runtime.lastError) {
@@ -112,42 +104,70 @@
     });
   }
 
-  function scanForAccepted(node) {
-    if (nodeLooksLikeAcceptedResult(node)) {
-      notifyAccepted();
-      return;
-    }
-
-    if (node instanceof HTMLElement) {
-      const candidates = node.querySelectorAll("div, span, p, td");
-      for (const candidate of candidates) {
-        if (nodeLooksLikeAcceptedResult(candidate)) {
-          notifyAccepted();
-          break;
-        }
-      }
-    }
+  function handleSubmitSignal(source) {
+    triggerSync(source).catch((error) => {
+      console.error("LeetSave sync failed:", error);
+    });
   }
 
-  function startObserver() {
-    if (observer) return;
-    observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        mutation.addedNodes.forEach((node) => scanForAccepted(node));
-        if (mutation.target) scanForAccepted(mutation.target);
-      }
-    });
+  function isSubmitButton(element) {
+    if (!(element instanceof HTMLElement)) return false;
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
+    const selectors = [
+      "[data-cy='submit-code-btn']",
+      "button[data-e2e-locator='console-submit-button']",
+      "button#submit-code-btn",
+    ];
+
+    if (selectors.some((selector) => element.matches(selector) || element.closest(selector))) {
+      return true;
+    }
+
+    const text = (element.textContent || "").trim().toLowerCase();
+    return text === "submit" || text === "submit code";
+  }
+
+  function installSubmitListeners() {
+    document.addEventListener(
+      "click",
+      (event) => {
+        if (!isSubmitButton(event.target)) return;
+        handleSubmitSignal("submit-click");
+      },
+      true
+    );
+
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        const isSubmitShortcut =
+          (event.ctrlKey || event.metaKey) && event.key === "Enter" ||
+          (event.ctrlKey || event.metaKey) && event.key === "'";
+        if (!isSubmitShortcut) return;
+        handleSubmitSignal("submit-shortcut");
+      },
+      true
+    );
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.data?.type !== "LEETSAVE_SUBMIT") return;
+    handleSubmitSignal(event.data.source || "message");
+  });
+
+  function init() {
+    installSubmitListeners();
+    chrome.runtime.sendMessage({ type: "INSTALL_PAGE_HOOK" });
+    console.log("LeetSave: listening for submits on", window.location.pathname);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startObserver);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    startObserver();
+    init();
   }
 })();
+
+} else {
+  console.log("LeetSave content script already active, skipping duplicate init");
+}

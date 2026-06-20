@@ -78,13 +78,20 @@ Health check: [http://localhost:8000/health](http://localhost:8000/health)
 
 Onboarding page: [http://localhost:8000/onboarding](http://localhost:8000/onboarding)
 
-### 3. GitHub OAuth App
+### 3. GitHub OAuth App (not GitHub App)
 
-Create a GitHub OAuth App with:
+Create an **OAuth App** at https://github.com/settings/developers → **OAuth Apps** → New OAuth App.
+
+Do **not** use a GitHub App for local setup — GitHub Apps cause `Resource not accessible by integration` errors with this project.
+
+Use:
 
 - Homepage URL: `http://localhost:8000`
 - Callback URL: `http://localhost:8000/api/v1/auth/github/callback`
-- Scopes requested by backend: `repo`, `user:email`
+
+Copy Client ID and Client Secret into `app/.env`.
+
+If you previously authorized a GitHub App version of LeetSave, revoke **both** entries at https://github.com/settings/applications before logging in again.
 
 ### 4. Chrome extension
 
@@ -168,7 +175,7 @@ pytest
 
 ## Troubleshooting
 
-- **401 from extension**: log in again from the popup.
+- **OAuth blocked / `ERR_BLOCKED_BY_CLIENT`**: the backend now redirects to `http://localhost:8000/onboarding/success#token=...` and the extension captures the token from that tab. Reload the extension and restart the backend after changing `.env`.
 - **CORS errors**: include `chrome-extension://<id>` in `CORS_ALLOWED_ORIGINS`.
-- **GitHub push failed**: confirm OAuth app has `repo` scope; retry with `POST /api/v1/github/sync/{submission_id}`.
+- **GitHub push failed / 403 Forbidden**: your GitHub token is missing `public_repo` or `repo` scope. Revoke LeetSave at [GitHub Applications](https://github.com/settings/applications), log out from the extension, log in again, and approve repository access. Then retry with `POST /api/v1/github/sync/{submission_id}`.
 - **Database errors**: ensure Docker Postgres is running and migrations are applied.

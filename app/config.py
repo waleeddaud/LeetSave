@@ -29,6 +29,10 @@ class Settings(BaseSettings):
 
     github_client_id: str = ""
     github_client_secret: str = ""
+    github_oauth_scope: str = Field(
+        default="public_repo user:email",
+        validation_alias=AliasChoices("GITHUB_OAUTH_SCOPE", "SCOPE"),
+    )
     github_redirect_uri: str = Field(
         default="http://localhost:8000/api/v1/auth/github/callback",
         validation_alias=AliasChoices("GITHUB_REDIRECT_URI", "CALLBACK_URL"),
@@ -54,11 +58,24 @@ class Settings(BaseSettings):
         return origins
 
     @property
+    def github_oauth_scope_normalized(self) -> str:
+        normalized = self.github_oauth_scope.replace(",", " ").strip()
+        parts = {part.strip() for part in normalized.split() if part.strip()}
+        parts.add("user:email")
+        return " ".join(sorted(parts, key=lambda value: (value != "user:email", value)))
+
+    @property
+    def github_client_id_suffix(self) -> str:
+        client_id = self.github_client_id.strip()
+        if len(client_id) < 6:
+            return client_id or "unset"
+        return client_id[-6:]
+
+    @property
     def extension_success_url(self) -> str:
         if self.frontend_or_extension_success_url:
             return self.frontend_or_extension_success_url
-        if self.chrome_extension_id:
-            return f"chrome-extension://{self.chrome_extension_id}/success.html"
+        # Use backend success page so Chrome does not block http -> chrome-extension redirects.
         return f"{self.backend_base_url}/onboarding/success"
 
 

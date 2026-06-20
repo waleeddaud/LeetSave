@@ -12,3 +12,6 @@ class MeResponse(BaseModel):
     github_connected: bool
     repo_full_name: Optional[str] = None
     repo_name: Optional[str] = None
+    github_scope: Optional[str] = None
+    github_token_kind: Optional[str] = None
+    github_client_id_suffix: Optional[str] = None

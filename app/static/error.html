@@ -19,16 +19,77 @@
       border: 1px solid #fecaca;
       border-radius: 12px;
       padding: 32px;
-      width: min(420px, 90vw);
+      width: min(480px, 90vw);
       text-align: center;
     }
+    .button {
+      display: inline-block;
+      margin-top: 12px;
+      background: #24292f;
+      color: #fff;
+      text-decoration: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+    .muted { color: #4b5563; font-size: 0.9rem; line-height: 1.5; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Authentication Failed</h1>
-    <p>Reason: {{reason}}</p>
-    <p><a href="/onboarding">Try again</a></p>
+    <p id="reason" class="muted">Reason: {{reason}}</p>
+    <p id="help" class="muted"></p>
+    <p class="muted">Close this tab, open the LeetSave extension popup, and click <strong>Continue with GitHub</strong>.</p>
+    <a class="button" href="/api/v1/auth/github/login">Continue with GitHub</a>
+    <p class="muted" style="margin-top: 16px;">
+      If this keeps failing, revoke the app at
+      <a href="https://github.com/settings/applications" target="_blank">github.com/settings/applications</a>
+      and try again.
+    </p>
   </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const reason = params.get("reason") || "{{reason}}";
+    const granted = params.get("granted") || "";
+    const reasonEl = document.getElementById("reason");
+    const helpEl = document.getElementById("help");
+
+    if (reason === "insufficient_scope") {
+      reasonEl.textContent = "GitHub did not grant repository access.";
+      helpEl.textContent = granted
+        ? `Scopes granted: ${granted}. LeetSave needs public_repo or repo.`
+        : "LeetSave needs permission to create and update a public repository.";
+    } else if (reason === "github_app_token") {
+      reasonEl.textContent = "GitHub returned a GitHub App token, not an OAuth App token.";
+      helpEl.textContent =
+        "LeetSave must use a GitHub OAuth App (leetBridge under Developer settings → OAuth Apps). " +
+        "Put its Client ID/Secret in app/.env, restart uvicorn, revoke old apps at github.com/settings/applications, then log in again.";
+    } else if (reason === "wrong_oauth_app") {
+      reasonEl.textContent = "GitHub login succeeded but no repository scopes were granted.";
+      helpEl.textContent =
+        "Your .env client_id likely does not match leetBridge. Update GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in app/.env, " +
+        "confirm the OAuth callback URL is http://localhost:8000/api/v1/auth/github/callback, restart uvicorn, revoke old authorizations, and log in again.";
+    } else if (reason === "auth_failed") {
+      reasonEl.textContent = "GitHub authorization failed.";
+    } else if (reason === "missing_token") {
+      reasonEl.textContent = "GitHub did not return an access token.";
+      helpEl.textContent =
+        "The authorization code could not be exchanged. Usually the Client ID and Client Secret in app/.env do not belong to the same OAuth App, or the code was already used. " +
+        "Copy both values fresh from leetBridge (OAuth Apps), restart uvicorn, revoke old authorizations, and try once.";
+    } else if (reason === "incorrect_client_credentials") {
+      reasonEl.textContent = "GitHub rejected the Client ID / Client Secret pair.";
+      helpEl.textContent =
+        "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in app/.env must both come from the same OAuth App (leetBridge). " +
+        "If you regenerated the secret on GitHub, paste the new secret into .env and restart uvicorn.";
+    } else if (reason === "bad_verification_code") {
+      reasonEl.textContent = "The GitHub authorization code expired or was already used.";
+      helpEl.textContent = "Close this tab and click Continue with GitHub once from the extension popup. Do not refresh the callback URL.";
+    } else if (reason === "redirect_uri_mismatch") {
+      reasonEl.textContent = "The OAuth callback URL does not match GitHub app settings.";
+      helpEl.textContent =
+        "Set leetBridge Authorization callback URL to http://localhost:8000/api/v1/auth/github/callback and keep the same value in GITHUB_REDIRECT_URI.";
+    }
+  </script>
 </body>
 </html>

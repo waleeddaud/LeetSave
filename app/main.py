@@ -6,12 +6,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from api.v1.router import api_router
 from config import get_settings
+from middleware.logging import RequestLoggingMiddleware, configure_logging
 
 settings = get_settings()
 STATIC_DIR = Path(__file__).parent / "static"
 
+configure_logging(settings.app_env)
+
 app = FastAPI(title="LeetSave API", version="1.0.0")
 
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list or ["*"],

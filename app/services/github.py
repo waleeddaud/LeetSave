@@ -49,9 +49,23 @@ def compute_code_hash(code: str, language: str, problem_slug: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def github_token_kind(access_token: str) -> str:
+    if access_token.startswith("ghu_"):
+        return "github_app_user"
+    if access_token.startswith("gho_"):
+        return "oauth_app"
+    if access_token.startswith("github_pat_"):
+        return "fine_grained_pat"
+    return "classic_oauth"
+
+
 def _github_headers(access_token: str) -> dict[str, str]:
+    if access_token.startswith(("gho_", "ghu_")):
+        authorization = f"Bearer {access_token}"
+    else:
+        authorization = f"token {access_token}"
     return {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": authorization,
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
@@ -63,6 +77,17 @@ def get_access_token(connection: UserGitHubConnection) -> str:
     return decrypt_token(connection.access_token_encrypted)
 
 
+def parse_github_scopes(scope_value: str | None) -> set[str]:
+    if not scope_value:
+        return set()
+    normalized = scope_value.replace(",", " ")
+    return {part.strip() for part in normalized.split() if part.strip()}
+
+
+def has_repo_scope(scopes: set[str]) -> bool:
+    return bool(scopes & {"public_repo", "repo"})
+
+
 async def fetch_github_user(access_token: str) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(
@@ -71,6 +96,69 @@ async def fetch_github_user(access_token: str) -> dict[str, Any]:
         )
         response.raise_for_status()
         return response.json()
+
+
+async def inspect_github_token(
+    access_token: str, token_scope: str | None = None
+) -> dict[str, Any]:
+    kind = github_token_kind(access_token)
+    scopes = parse_github_scopes(token_scope)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://api.github.com/user",
+            headers=_github_headers(access_token),
+        )
+        response.raise_for_status()
+        header_scopes = parse_github_scopes(response.headers.get("X-OAuth-Scopes", ""))
+        accepted_scopes = parse_github_scopes(response.headers.get("X-Accepted-OAuth-Scopes", ""))
+
+    if not scopes:
+        scopes = header_scopes
+
+    return {
+        "kind": kind,
+        "scopes": scopes,
+        "header_scopes": header_scopes,
+        "accepted_scopes": accepted_scopes,
+        "login": response.json().get("login"),
+    }
+
+
+async def resolve_granted_scopes(access_token: str, token_scope: str | None) -> set[str]:
+    inspection = await inspect_github_token(access_token, token_scope)
+    return inspection["scopes"]
+
+
+def validate_github_token_for_repo_sync(
+    access_token: str, granted_scopes: set[str], client_id_suffix: str
+) -> str | None:
+    kind = github_token_kind(access_token)
+    if kind == "github_app_user":
+        return (
+            "GitHub returned a GitHub App user token (ghu_), not an OAuth App token. "
+            f"Your backend is using client_id ending in …{client_id_suffix}. "
+            "Copy the Client ID/Secret from your leetBridge OAuth App (Developer settings → OAuth Apps, not GitHub Apps) "
+            "into app/.env, restart uvicorn, revoke all LeetSave authorizations at "
+            "https://github.com/settings/applications, then log in again."
+        )
+
+    if granted_scopes and not has_repo_scope(granted_scopes):
+        return (
+            f"GitHub granted scopes {sorted(granted_scopes)} but LeetSave needs public_repo or repo. "
+            "Revoke the app at https://github.com/settings/applications and authorize again."
+        )
+
+    if not granted_scopes:
+        return (
+            "GitHub returned no OAuth scopes (stored as 'unknown'). "
+            f"Backend client_id ends with …{client_id_suffix}. "
+            "This usually means .env still points at a GitHub App or an old OAuth app, not leetBridge. "
+            "Update GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in app/.env to match leetBridge exactly, "
+            "restart the backend, revoke old authorizations, and log in again."
+        )
+
+    return None
 
 
 async def exchange_oauth_code(code: str) -> dict[str, Any]:
@@ -86,7 +174,11 @@ async def exchange_oauth_code(code: str) -> dict[str, Any]:
             },
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if payload.get("error"):
+            description = payload.get("error_description") or payload.get("error")
+            raise ValueError(f"GitHub token exchange failed: {description}")
+        return payload
 
 
 def upsert_user_from_github(db: Session, profile: dict[str, Any]) -> User:
@@ -107,6 +199,19 @@ def upsert_user_from_github(db: Session, profile: dict[str, Any]) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def _github_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text or f"HTTP {response.status_code}"
+
+    message = payload.get("message", "")
+    errors = payload.get("errors")
+    if errors:
+        return f"{message} ({errors})"
+    return message or f"HTTP {response.status_code}"
 
 
 async def ensure_repo(db: Session, user: User) -> UserGitHubConnection:
@@ -138,6 +243,19 @@ async def ensure_repo(db: Session, user: User) -> UserGitHubConnection:
                     "auto_init": True,
                 },
             )
+            if create_resp.status_code == 403:
+                scope = connection.scope or "unknown"
+                detail = _github_error_detail(create_resp)
+                token_kind = github_token_kind(access_token)
+                raise ValueError(
+                    "GitHub denied repository creation (403). "
+                    f"Stored scope: '{scope}', token kind: '{token_kind}'. "
+                    f"Backend client_id ends with …{settings.github_client_id_suffix}. "
+                    "LeetSave needs a GitHub OAuth App (Developer settings → OAuth Apps), not a GitHub App. "
+                    "Put leetBridge Client ID/Secret in app/.env, restart uvicorn, revoke all old authorizations "
+                    "at https://github.com/settings/applications, log out from the extension, and log in again. "
+                    f"GitHub says: {detail}"
+                )
             create_resp.raise_for_status()
             repo = create_resp.json()
         elif get_resp.status_code == 200:
